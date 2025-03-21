@@ -1,3 +1,9 @@
+//All contributions from Meta and affiliates:
+//Copyright (c) 2025- Meta Platforms, Inc. and affiliates            (Samuel Rota Bulo')
+
+//All contributions by jaesung-cs:
+//Copyright (c) 2024- jaesung-cs
+
 #version 460 core
 
 #extension GL_EXT_shader_16bit_storage : require
@@ -11,7 +17,7 @@ layout(std430, set = 1, binding = 1) writeonly buffer GaussianPosition {
 };
 
 layout(std430, set = 1, binding = 2) writeonly buffer GaussianCov3d {
-  float gaussian_cov3d[];  // (N, 6)
+  float gaussian_qscale[];  // (N, 7)
 };
 
 layout(std430, set = 1, binding = 3) writeonly buffer GaussianOpacity {
@@ -51,38 +57,13 @@ void main() {
                   ply[base * id + local_offsets[8]], ply[base * id + local_offsets[9]]);
     q = q / length(q);
 
-    mat3 rot;
-    float xx = q.x * q.x;
-    float yy = q.y * q.y;
-    float zz = q.z * q.z;
-    float xy = q.x * q.y;
-    float xz = q.x * q.z;
-    float yz = q.y * q.z;
-    float wx = q.w * q.x;
-    float wy = q.w * q.y;
-    float wz = q.w * q.z;
-    rot[0][0] = 1.f - 2.f * (yy + zz);
-    rot[0][1] = 2.f * (xy + wz);
-    rot[0][2] = 2.f * (xz - wy);
-    rot[1][0] = 2.f * (xy - wz);
-    rot[1][1] = 1.f - 2.f * (xx + zz);
-    rot[1][2] = 2.f * (yz + wx);
-    rot[2][0] = 2.f * (xz + wy);
-    rot[2][1] = 2.f * (yz - wx);
-    rot[2][2] = 1.f - 2.f * (xx + yy);
-
-    mat3 ss = mat3(0.f);
-    ss[0][0] = s[0] * s[0];
-    ss[1][1] = s[1] * s[1];
-    ss[2][2] = s[2] * s[2];
-    mat3 cov3d = rot * ss * transpose(rot);
-
-    gaussian_cov3d[6 * id + 0] = cov3d[0][0];
-    gaussian_cov3d[6 * id + 1] = cov3d[1][0];
-    gaussian_cov3d[6 * id + 2] = cov3d[2][0];
-    gaussian_cov3d[6 * id + 3] = cov3d[1][1];
-    gaussian_cov3d[6 * id + 4] = cov3d[2][1];
-    gaussian_cov3d[6 * id + 5] = cov3d[2][2];
+    gaussian_qscale[7 * id + 0] = q[0];
+    gaussian_qscale[7 * id + 1] = q[1];
+    gaussian_qscale[7 * id + 2] = q[2];
+    gaussian_qscale[7 * id + 3] = q[3];
+    gaussian_qscale[7 * id + 4] = s[0];
+    gaussian_qscale[7 * id + 5] = s[1];
+    gaussian_qscale[7 * id + 6] = s[2];
 
     gaussian_position[3 * id + 0] = ply[base * id + local_offsets[0]];
     gaussian_position[3 * id + 1] = ply[base * id + local_offsets[1]];

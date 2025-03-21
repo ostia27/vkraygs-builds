@@ -1,8 +1,4 @@
-//All contributions from Meta and affiliates:
-//Copyright (c) 2025- Meta Platforms, Inc. and affiliates            (Samuel Rota Bulo')
-
-//All contributions by jaesung-cs:
-//Copyright (c) 2024- jaesung-cs
+//Copyright (c) Meta Platforms, Inc. and affiliates
 
 #version 460 core
 
@@ -59,14 +55,37 @@ layout(std430, set = 2, binding = 0) writeonly buffer DrawIndirect {
 };
 
 layout(std430, set = 2, binding = 1) writeonly buffer Instances {
-  vec4 instances[];  // (N, 12). 3 for ndc position, 1 padding, 4 for rot scale, 4 for color.
+  float instances[];  // (N, 14)
 };
 
-layout(std430, set = 2, binding = 2) buffer VisiblePointCount { uint visible_point_count; };
+layout(std430, set = 2, binding = 2) buffer VisiblePointCount {
+  uint visible_point_count;
+};
 
 layout(std430, set = 2, binding = 5) readonly buffer InverseMap {
   int inverse_map[];  // (N), inverse map from id to sorted index
 };
+
+void eigenvalueDecomposition(in vec3 cov, out vec2 v1, out vec2 v2, out float lambda1, out float lambda2){
+    const float mid = 0.5f * (cov.x + cov.z);
+    const float d = length(vec2(0.5f * (cov.x - cov.z), cov.y));
+
+    lambda1 = mid + d;
+    lambda2 = mid - d;
+
+    // Compute one eigenvector using a stable formula
+    const float deltaX = abs(cov.x - lambda1);
+    const float deltaZ = abs(cov.z - lambda1);
+    if (deltaX > deltaZ) {
+        v1 = normalize(vec2(cov.y, lambda1 - cov.x));
+    } else if(deltaX < deltaZ) {
+        v1 = normalize(vec2(lambda1 - cov.z, cov.y));
+    } else {
+        v1 = vec2(1.f, 0.f);
+    }
+
+    v2 = vec2(-v1.y, v1.x);
+}
 
 void q_to_rot2x3(in vec4 q, out mat2x3 rot){
 
@@ -126,7 +145,6 @@ void compute_color(in mat3x4 sh[4], in vec3 dir, out vec3 color){
   color = max(color + 0.5f, 0.f);
 }
 
-
 void main() {
   uint id = gl_GlobalInvocationID.x;
   if (id >= point_count) return;
@@ -147,10 +165,10 @@ void main() {
   int inverse_id = inverse_map[id];
   if (inverse_id == -1) return;
 
+  float opacity = gaussian_opacity[id];
+
   vec4 q = vec4(gaussian_qscale[id * 7 + 0], gaussian_qscale[id * 7 + 1], gaussian_qscale[id * 7 + 2], gaussian_qscale[id * 7 + 3]);
   vec3 s = vec3(gaussian_qscale[id * 7 + 4], gaussian_qscale[id * 7 + 5], gaussian_qscale[id * 7 + 6]);
-
-  vec4 pos = vec4(gaussian_position[id * 3 + 0], gaussian_position[id * 3 + 1], gaussian_position[id * 3 + 2], 1.f);
 
   mat3x4 sh[4]={
     mat3x4(gaussian_sh[id * 12 + 0], gaussian_sh[id * 12 + 4],
@@ -163,13 +181,16 @@ void main() {
           gaussian_sh[id * 12 + 11]),
   };
 
-  mat2x3 rot2x3;
-  q_to_rot2x3(q,rot2x3);
+  vec4 pos = vec4(gaussian_position[id * 3 + 0], gaussian_position[id * 3 + 1],
+                  gaussian_position[id * 3 + 2], 1.f);
 
   // direction in model space for SH calculation
   vec4 camera_podel_position = inverse(model) * vec4(camera_position, 1.f);
   camera_podel_position = camera_podel_position / camera_podel_position.w;
   vec3 dir = normalize(pos.xyz - camera_podel_position.xyz);
+
+  mat2x3 rot2x3;
+  q_to_rot2x3(q,rot2x3);
 
   // model matrix
   mat3 model3d = mat3(model);
@@ -180,66 +201,69 @@ void main() {
   mat3 view3d = mat3(view);
   rot2x3 = view3d * rot2x3;
   pos = view * pos;
+  pos = pos / pos.w; // camera space
 
-  mat3 S = mat3(
-    s[0],0.f,0,
-    0,s[1],0,
-    0,0,s[2]
-  );
+  mat3 rot = mat3(rot2x3[0], rot2x3[1], cross(rot2x3[0], rot2x3[1]));
 
-  float r = length(vec3(pos));
-  mat2 projection_scale = mat2(projection);
+  vec3 rmu=transpose(rot)*pos.xyz;
 
-  //mat3 J = mat3(-1.f / pos.z, 0.f, -2.f * pos.x / r, 0.f, -1.f / pos.z, -2.f * pos.y / r, pos.x / pos.z / pos.z,
-  //              pos.y / pos.z / pos.z, -2.f * pos.z / r);
-  mat3x2 J = projection_scale * mat3x2(-1.f / pos.z, 0.f, 0.f, -1.f / pos.z,  pos.x / pos.z / pos.z,
-                pos.y / pos.z / pos.z);
+  vec2 f=abs(vec2(projection[0][0]*screen_size.x,projection[1][1]*screen_size.y)/2);
+  vec3 sMIP = sqrt(s * s + mip_bias * dot(rmu, rmu)/(f.x * f.y));
 
+  vec3 mu_hat = rmu/sMIP; //note this is unnormalized by now
 
-  mat3x2 tmp = J * mat3(rot2x3[0], rot2x3[1], cross(rot2x3[0], rot2x3[1])) * S;
+  float c = length(mu_hat); // this is c from the paper
 
-  // projection xy
-  mat2 cov2d = tmp * transpose(tmp);
-
-  float opacity = gaussian_opacity[id];
-
-  float det_cov2d = determinant(cov2d);
-
-  // low-pass filter
-  cov2d[0][0] += mip_bias / screen_size.x / screen_size.x;
-  cov2d[1][1] += mip_bias / screen_size.y / screen_size.y;
-
-  if(mip_modulation){
-    opacity *= sqrt(det_cov2d/determinant(cov2d));
+  // MIP modulation
+  if(mip_bias>0 && mip_modulation){
+    opacity *= length(rmu*vec3(s.y*s.z,s.x*s.z,s.y*s.x))/(sMIP.x*sMIP.y*sMIP.z*c);
   }
 
 
-  // eigendecomposition
-  // [a c] = [x y]
-  // [c b]   [y z]
-  float a = cov2d[0][0];
-  float b = cov2d[1][1];
-  float c = cov2d[1][0];
-  float D = sqrt((a - b) * (a - b) + 4.f * c * c);
-  float s0 = sqrt(0.5f * (a + b + D));
-  float s1 = sqrt(0.5f * (a + b - D));
-  // decompose to R S^2 R^T
-  float sin2t = 2.f * c / D;
-  float cos2t = (a - b) / D;
-  float theta = atan(sin2t, cos2t) / 2.f;
-  float cos_theta = cos(theta);
-  float sin_theta = sin(theta);
-  // R*S
-  mat2 rot_scale = mat2(s0 * cos_theta, s0 * sin_theta, -s1 * sin_theta, s1 * cos_theta);
+  mu_hat /= c; // Normalizing mu_hat
 
-  pos = projection * pos;
-  pos = pos / pos.w;
+
+  // Computing T
+  mat2x3 Q;
+  vec3 tmp = mu_hat;
+  float v_sign = mu_hat.z>0?1.0f:-1.0f;
+
+  tmp.z += v_sign;
+
+  float den = dot(tmp, tmp) * 0.5f;
+  Q[0] = tmp * (tmp.x / den);
+  Q[0].x -= 1.0f;
+  Q[0] *= sMIP * v_sign;
+  Q[1] = tmp * (tmp.y / den);
+  Q[1].y -= 1.0f;
+  Q[1] *= sMIP;
+  Q = rot * Q;
+
+  // We compute cov2d as the elements of the upper triangular part of tranpose(Q)*Q
+  vec3 QQ = vec3(dot(Q[0], Q[0]), dot(Q[0], Q[1]), dot(Q[1], Q[1]));
+
+  float lambda1, lambda2;
+  mat2 U;
+  eigenvalueDecomposition(QQ, U[0], U[1], lambda1, lambda2);
+
+  Q = Q * U;
+  mat3 T = mat3(Q[0],Q[1],pos.xyz);
 
   vec3 color;
   compute_color(sh, dir, color);
 
-
-  instances[inverse_id * 3 + 0].xyz = pos.xyz;
-  instances[inverse_id * 3 + 1] = vec4(rot_scale[0], rot_scale[1]);
-  instances[inverse_id * 3 + 2] = vec4(color, opacity);
+  instances[inverse_id * 14 + 0] = T[0][0];
+  instances[inverse_id * 14 + 1] = T[0][1];
+  instances[inverse_id * 14 + 2] = T[0][2];
+  instances[inverse_id * 14 + 3] = T[1][0];
+  instances[inverse_id * 14 + 4] = T[1][1];
+  instances[inverse_id * 14 + 5] = T[1][2];
+  instances[inverse_id * 14 + 6] = T[2][0];
+  instances[inverse_id * 14 + 7] = T[2][1];
+  instances[inverse_id * 14 + 8] = T[2][2];
+  instances[inverse_id * 14 + 9] = c*c;
+  instances[inverse_id * 14 + 10] = color.r;
+  instances[inverse_id * 14 + 11] = color.g;
+  instances[inverse_id * 14 + 12] = color.b;
+  instances[inverse_id * 14 + 13] = opacity;
 }

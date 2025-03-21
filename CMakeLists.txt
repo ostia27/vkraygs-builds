@@ -96,6 +96,10 @@ add_shader(vkgs src/shader/splat.frag splat_frag)
 add_shader(vkgs src/shader/splat_geom.vert splat_geom_vert)
 add_shader(vkgs src/shader/splat_geom.geom splat_geom_geom)
 
+add_shader(vkgs src/shader/raygs_projection.comp raygs_projection_comp)
+add_shader(vkgs src/shader/raygs_splat.vert raygs_splat_vert)
+add_shader(vkgs src/shader/raygs_splat.frag raygs_splat_frag)
+
 # executable
 add_executable(vkgs_viewer examples/vkgs_viewer.cc)
 target_link_libraries(vkgs_viewer

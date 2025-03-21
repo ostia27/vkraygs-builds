@@ -1,3 +1,9 @@
+//All contributions from Meta and affiliates:
+//Copyright (c) 2025- Meta Platforms, Inc. and affiliates            (Samuel Rota Bulo')
+
+//All contributions by jaesung-cs:
+//Copyright (c) 2024- jaesung-cs
+
 #include <vkgs/engine/engine.h>
 
 #include <atomic>
@@ -39,6 +45,7 @@
 
 #include "generated/parse_ply_comp.h"
 #include "generated/projection_comp.h"
+#include "generated/raygs_projection_comp.h"
 #include "generated/rank_comp.h"
 #include "generated/inverse_index_comp.h"
 #include "generated/splat_vert.h"
@@ -47,6 +54,8 @@
 #include "generated/splat_geom_geom.h"
 #include "generated/color_vert.h"
 #include "generated/color_frag.h"
+#include "generated/raygs_splat_vert.h"
+#include "generated/raygs_splat_frag.h"
 
 // workaround for Windows OS.
 #undef CreateWindow
@@ -85,6 +94,14 @@ struct Resolution {
   const char* tag;
 };
 
+struct SplatPushConstants {
+  SplatPushConstants():mip_bias(0.1f), log_p_min(-4.0f), mip_modulation(true) {}
+  glm::mat4 model;
+  float mip_bias;
+  float log_p_min;
+  bool mip_modulation;
+};
+
 std::vector<Resolution> preset_resolutions = {
     // clang-format off
     {640, 480, "640 x 480 (480p)"},
@@ -103,6 +120,11 @@ class Engine::Impl {
   enum class SplatRenderMode {
     TriangleList,
     GeometryShader,
+  };
+
+  enum class ModelType {
+    GS,
+    RayGS,
   };
 
   enum class DisplayMode {
@@ -226,7 +248,7 @@ class Engine::Impl {
       pipeline_layout_info.push_constants.resize(1);
       pipeline_layout_info.push_constants[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
       pipeline_layout_info.push_constants[0].offset = 0;
-      pipeline_layout_info.push_constants[0].size = sizeof(glm::mat4);
+      pipeline_layout_info.push_constants[0].size = sizeof(SplatPushConstants);
 
       compute_pipeline_layout_ = vk::PipelineLayout(context_, pipeline_layout_info);
     }
@@ -239,7 +261,7 @@ class Engine::Impl {
       pipeline_layout_info.push_constants.resize(1);
       pipeline_layout_info.push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
       pipeline_layout_info.push_constants[0].offset = 0;
-      pipeline_layout_info.push_constants[0].size = sizeof(glm::mat4);
+      pipeline_layout_info.push_constants[0].size = sizeof(SplatPushConstants);
 
       graphics_pipeline_layout_ = vk::PipelineLayout(context_, pipeline_layout_info);
     }
@@ -276,6 +298,14 @@ class Engine::Impl {
       projection_pipeline_ = vk::ComputePipeline(context_, pipeline_info);
     }
 
+    // raygs projection pipeline
+    {
+      vk::ComputePipelineCreateInfo pipeline_info = {};
+      pipeline_info.layout = compute_pipeline_layout_;
+      pipeline_info.source = raygs_projection_comp;
+      raygs_projection_pipeline_ = vk::ComputePipeline(context_, pipeline_info);
+    }
+
     // splat pipeline
     {
       std::vector<VkPipelineColorBlendAttachmentState> color_blend_attachments(1);
@@ -303,6 +333,36 @@ class Engine::Impl {
         pipeline_info.render_pass = render_passes_[key];
         pipeline_info.samples = key.samples;
         splat_pipelines_[key] = vk::GraphicsPipeline(context_, pipeline_info);
+      }
+    }
+
+    // raygs splat pipeline
+    {
+      std::vector<VkPipelineColorBlendAttachmentState> color_blend_attachments(1);
+      color_blend_attachments[0] = {};
+      color_blend_attachments[0].blendEnable = VK_TRUE;
+      color_blend_attachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+      color_blend_attachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+      color_blend_attachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+      color_blend_attachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+      color_blend_attachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+      color_blend_attachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+      color_blend_attachments[0].colorWriteMask =
+          VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+      vk::GraphicsPipelineCreateInfo pipeline_info = {};
+      pipeline_info.layout = graphics_pipeline_layout_;
+      pipeline_info.vertex_shader = raygs_splat_vert;
+      pipeline_info.fragment_shader = raygs_splat_frag;
+      pipeline_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+      pipeline_info.depth_test = true;
+      pipeline_info.depth_write = false;
+      pipeline_info.color_blend_attachments = std::move(color_blend_attachments);
+
+      for (const auto& key : render_pass_keys) {
+        pipeline_info.render_pass = render_passes_[key];
+        pipeline_info.samples = key.samples;
+        raygs_splat_pipelines_[key] = vk::GraphicsPipeline(context_, pipeline_info);
       }
     }
 
@@ -484,7 +544,7 @@ class Engine::Impl {
     {
       splat_storage_.position = vk::Buffer(context_, MAX_SPLAT_COUNT * 3 * sizeof(float),
                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-      splat_storage_.cov3d = vk::Buffer(context_, MAX_SPLAT_COUNT * 6 * sizeof(float),
+      splat_storage_.qscale = vk::Buffer(context_, MAX_SPLAT_COUNT * 7* sizeof(float),
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
       splat_storage_.opacity = vk::Buffer(context_, MAX_SPLAT_COUNT * sizeof(float),
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -498,7 +558,7 @@ class Engine::Impl {
       splat_storage_.inverse_index = vk::Buffer(context_, MAX_SPLAT_COUNT * sizeof(uint32_t),
                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
-      splat_storage_.instance = vk::Buffer(context_, MAX_SPLAT_COUNT * 12 * sizeof(float),
+      splat_storage_.instance = vk::Buffer(context_, MAX_SPLAT_COUNT * 14 * sizeof(float),
                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     }
 
@@ -751,7 +811,7 @@ class Engine::Impl {
     static glm::vec3 gr(0.f);
     static glm::quat gq;
     static float scale = 1.f;
-    glm::mat4 model(1.f);
+    splat_push_constants_.model=glm::mat4(1.f);
 
     bool msaa_changed = false;
     static int msaa = 0;
@@ -954,11 +1014,39 @@ class Engine::Impl {
 
           case 1:
             splat_render_mode_ = SplatRenderMode::GeometryShader;
+            model_type_ = ModelType::GS;
             break;
 
           default:
             break;
         }
+
+        static int model_type = static_cast<int>(model_type_);
+        ImGui::Text("Model Type");
+        ImGui::SameLine();
+        ImGui::RadioButton("GS", &model_type, 0);
+        if(draw_method == 0){
+          ImGui::SameLine();
+          ImGui::RadioButton("RayGS", &model_type, 1);
+        }
+
+        switch (model_type) {
+          case 0:
+            model_type_ = ModelType::GS;
+            break;
+
+          case 1:
+            model_type_ = ModelType::RayGS;
+            break;
+
+          default:
+            break;
+        }
+
+        ImGui::SliderFloat("MIP bias", &splat_push_constants_.mip_bias, 0.0f, 1.0f);
+        ImGui::Checkbox("MIP modulation", &splat_push_constants_.mip_modulation);
+
+        ImGui::SliderFloat("log p_min", &splat_push_constants_.log_p_min, -5.f, -3.f);
 
         ImGui::Checkbox("Axis", &show_axis_);
         ImGui::SameLine();
@@ -1016,7 +1104,7 @@ class Engine::Impl {
       viewer_.EndUi();
     }
 
-    model = ToScaleMatrix4(scale_ * scale) * glm::toMat4(gq) * ToTranslationMatrix4(translation_ + gt) *
+    splat_push_constants_.model = ToScaleMatrix4(scale_ * scale) * glm::toMat4(gq) * ToTranslationMatrix4(translation_ + gt) *
             glm::toMat4(rotation_ * lq) * ToTranslationMatrix4(lt);
 
     // record command buffer
@@ -1090,13 +1178,13 @@ class Engine::Impl {
       if (loaded_point_count_ != 0) {
         descriptors_[frame_index].gaussian.Update(1, splat_storage_.position, 0,
                                                   loaded_point_count_ * 3 * sizeof(float));
-        descriptors_[frame_index].gaussian.Update(2, splat_storage_.cov3d, 0, loaded_point_count_ * 6 * sizeof(float));
+        descriptors_[frame_index].gaussian.Update(2, splat_storage_.qscale, 0, loaded_point_count_ * 7 * sizeof(float));
         descriptors_[frame_index].gaussian.Update(3, splat_storage_.opacity, 0,
                                                   loaded_point_count_ * 1 * sizeof(float));
         descriptors_[frame_index].gaussian.Update(4, splat_storage_.sh, 0, loaded_point_count_ * 48 * sizeof(uint16_t));
 
         descriptors_[frame_index].splat_instance.Update(1, splat_storage_.instance, 0,
-                                                        loaded_point_count_ * 12 * sizeof(float));
+                                                        loaded_point_count_ * 14 * sizeof(float));
         descriptors_[frame_index].splat_instance.Update(2, splat_visible_point_count_, 0,
                                                         splat_visible_point_count_.size());
         descriptors_[frame_index].splat_instance.Update(3, splat_storage_.key, 0,
@@ -1177,8 +1265,8 @@ class Engine::Impl {
           vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout_, 0, descriptors.size(),
                                   descriptors.data(), 0, nullptr);
 
-          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
+          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(splat_push_constants_),
+                             &splat_push_constants_);
 
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, timestamp_query_pool, 1);
 
@@ -1236,8 +1324,8 @@ class Engine::Impl {
 
           vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, inverse_index_pipeline_);
 
-          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
+          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(splat_push_constants_), &splat_push_constants_);
+
 
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timestamp_query_pool, 5);
 
@@ -1255,10 +1343,9 @@ class Engine::Impl {
           vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                                &barrier, 0, NULL, 0, NULL);
 
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, projection_pipeline_);
+          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, model_type_ == ModelType::GS?projection_pipeline_:raygs_projection_pipeline_);
 
-          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
+          vkCmdPushConstants(cb, compute_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(splat_push_constants_), &splat_push_constants_);
 
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timestamp_query_pool, 7);
 
@@ -1440,7 +1527,8 @@ class Engine::Impl {
       model[0][0] = 10.f;
       model[1][1] = 10.f;
       model[2][2] = 10.f;
-      vkCmdPushConstants(cb, graphics_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(model), &model);
+      splat_push_constants_.model=model;
+      vkCmdPushConstants(cb, graphics_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(splat_push_constants_), &splat_push_constants_);
 
       if (show_axis_) {
         std::vector<VkBuffer> vbs = {axis_.position_buffer, axis_.color_buffer};
@@ -1467,7 +1555,11 @@ class Engine::Impl {
     if (loaded_point_count_ != 0) {
       switch (splat_render_mode_) {
         case SplatRenderMode::TriangleList: {
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splat_pipelines_[{samples_, depth_format_}]);
+          if(model_type_ == ModelType::GS){
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splat_pipelines_[{samples_, depth_format_}]);
+          }else{
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, raygs_splat_pipelines_[{samples_, depth_format_}]);
+          }
 
           vkCmdBindIndexBuffer(cb, splat_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
 
@@ -1556,6 +1648,8 @@ class Engine::Impl {
   VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
   VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
   SplatRenderMode splat_render_mode_ = SplatRenderMode::TriangleList;
+  ModelType model_type_ = ModelType::RayGS;
+  SplatPushConstants splat_push_constants_;
 
   Camera camera_;
 
@@ -1579,6 +1673,7 @@ class Engine::Impl {
   vk::ComputePipeline rank_pipeline_;
   vk::ComputePipeline inverse_index_pipeline_;
   vk::ComputePipeline projection_pipeline_;
+  vk::ComputePipeline raygs_projection_pipeline_;
 
   // sorter
   VrdxSorter sorter_ = VK_NULL_HANDLE;
@@ -1588,6 +1683,7 @@ class Engine::Impl {
   std::map<RenderPassKey, vk::RenderPass> render_passes_;
   std::map<RenderPassKey, vk::GraphicsPipeline> color_line_pipelines_;
   std::map<RenderPassKey, vk::GraphicsPipeline> splat_pipelines_;
+  std::map<RenderPassKey, vk::GraphicsPipeline> raygs_splat_pipelines_;
   std::map<RenderPassKey, vk::GraphicsPipeline> splat_geom_pipelines_;
 
   vk::Attachment color_attachment_;
@@ -1633,7 +1729,7 @@ class Engine::Impl {
 
   struct SplatStorage {
     vk::Buffer position;  // (N, 3)
-    vk::Buffer cov3d;     // (N, 6)
+    vk::Buffer qscale;     // (N, 7)
     vk::Buffer opacity;   // (N)
     vk::Buffer sh;        // (N, 3, 16)
 
