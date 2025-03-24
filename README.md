@@ -39,7 +39,7 @@ $ cmake --build build --config Release -j
 
 ### Run
 ```bash
-$ ./build/vkgs_viewer  # or ./build/Release/vkgs_viewer
+$ ./build/vkgs_viewer 
 $ ./build/vkgs_viewer -i <ply_filepath>
 ```
 Drag and drop pretrained .ply files.
