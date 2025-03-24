@@ -1,8 +1,8 @@
 # vkraygs
 
-Official code of the CVPR 2025 paper "Hardware Rasterized Ray-Based Gaussian Splatting" [[Project page](https://facebookresearch.github.io/vkraygs)].
+Official code of the CVPR 2025 paper "Hardware Rasterized Ray-Based Gaussian Splatting" [[Project page](https://facebookresearch.github.io/vkraygs/)].
 
-The codebase provides a Ray-based Gaussian splatting viewer written on top of [vkgs](https://github.com/jaesung-cs/vkgs/).
+The codebase provides a Ray-based Gaussian splatting viewer written on top of [vkgs](https://github.com/jaesung-cs/vkgs).
 
 ## Desktop Viewer
 
