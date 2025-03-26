@@ -1,32 +1,20 @@
-name: C/C++ CI
+name: Build vkraygs
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+on: [push, pull_request]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
-    - run: git submodule update --init --recursive
-    
-    - uses: actions/checkout@v4
-    
-    - uses: lukka/get-cmake@latest
-    
-    - uses: humbletim/install-vulkan-sdk@v1.2
-        
-    - name: make
-      run: |
-        cmake . -B build
-        cmake --build build --config Release -j
-
-    - uses: actions/upload-artifact@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
       with:
-        name: build
-        path: build
+        submodules: recursive
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+    - name: Configure CMake
+      run: cmake . -B build -DCMAKE_BUILD_TYPE=Release
+    - name: Build
+      run: cmake --build build --parallel
