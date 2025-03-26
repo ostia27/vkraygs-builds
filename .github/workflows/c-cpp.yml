@@ -16,9 +16,8 @@ jobs:
     - uses: actions/checkout@v4
     
     - uses: lukka/get-cmake@latest
-      with:
-        useLocalCache: true
-        useCloudCache: false
+    
+    - uses: humbletim/install-vulkan-sdk@v1.2
         
     - name: make
       run: |
@@ -27,5 +26,5 @@ jobs:
 
     - uses: actions/upload-artifact@v4
       with:
-        name: release
-        path: Release
+        name: build
+        path: build
