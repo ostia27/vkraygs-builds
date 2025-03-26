@@ -13,7 +13,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev wayland-protocols libwayland-dev
+        sudo apt-get install -y libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev wayland-protocols libwayland-dev libxkbcommon-dev
     - name: Install CUDA toolkit
       run: |
         sudo apt-get install -y nvidia-cuda-toolkit
