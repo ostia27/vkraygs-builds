@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Submodule
     - run: git submodule update --init --recursive
     
     - uses: actions/checkout@v4
