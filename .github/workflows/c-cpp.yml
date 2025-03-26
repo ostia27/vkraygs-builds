@@ -21,3 +21,8 @@ jobs:
       run: cmake . -B build -DCMAKE_BUILD_TYPE=Release
     - name: Build
       run: cmake --build build --parallel
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: vkraygs-binaries
+        path: build/vkgs_viewer
