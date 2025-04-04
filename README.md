@@ -27,7 +27,7 @@ Viewer works with pre-trained 3DGS-compatible models as input.
   - glfw
   - imgui
   - argparse
-  - [vulkan_radix_sort](https://github.com/jaesung-cs/vulkan_radix_sort): my Vulkan/GLSL implementation of reduce-then-scan radix sort.
+  - [vulkan_radix_sort](https://github.com/jaesung-cs/vulkan_radix_sort): Vulkan/GLSL implementation of reduce-then-scan radix sort.
 
 
 ### Build
